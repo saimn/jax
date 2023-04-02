@@ -19,6 +19,7 @@ from jax._src.pjit import (
   pjit as pjit,
   pjit_p as pjit_p,
   with_sharding_constraint as with_sharding_constraint,
+  sharding_constraint_p as sharding_constraint_p,
 )
 from jax._src.sharding_impls import (
   AUTO as AUTO,

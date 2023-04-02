@@ -23,8 +23,8 @@ import io
 import itertools
 import re
 import typing
-from typing import (Any, Callable, Dict, Iterator, List, NamedTuple, Optional,
-                    Protocol, Sequence, Set, Tuple, Type, Union)
+from typing import (Any, Callable, Dict, Iterator, List, Mapping, NamedTuple,
+                    Optional, Protocol, Sequence, Set, Tuple, Type, Union)
 import warnings
 
 import numpy as np
@@ -392,6 +392,10 @@ class ModuleContext:
   cached_primitive_lowerings: Dict[Any, func_dialect.FuncOp]
   cached_call_jaxpr_lowerings: Dict[Any, func_dialect.FuncOp]
 
+  # A mapping between primitives and user-defined LoweringRules.
+  # When lowering a primitive, give priorioty to the rule in this map over
+  # existing Jax rules.
+  override_lowering_rules: Optional[Mapping[core.Primitive, LoweringRule]]
 
   @property
   def axis_env(self) -> sharding_impls.AxisEnv:
@@ -414,7 +418,8 @@ class ModuleContext:
                                                 func_dialect.FuncOp]] = None,
       cached_call_jaxpr_lowerings: Optional[Dict[Any,
                                                  func_dialect.FuncOp]] = None,
-      dim_vars: Sequence[str] = ()):
+      dim_vars: Sequence[str] = (),
+      override_lowering_rules: Optional[Mapping[core.Primitive, LoweringRule]] = None):
     assert platform is not None
     self.context = context or make_ir_context()
     self.module = module or ir.Module.create(loc=ir.Location.unknown(self.context))
@@ -433,6 +438,7 @@ class ModuleContext:
                                         if cached_call_jaxpr_lowerings is None
                                         else cached_call_jaxpr_lowerings)
     self.dim_vars = dim_vars
+    self.override_lowering_rules = override_lowering_rules
 
   @property
   def backend(self) -> xb.XlaBackend:
@@ -574,6 +580,7 @@ def lower_jaxpr_to_module(
     result_names: Optional[Sequence[Optional[str]]] = None,
     num_replicas: int = 1,
     num_partitions: int = 1,
+    override_lowering_rules: Optional[Mapping[core.Primitive, LoweringRule]] = None
 ) -> LoweringResult:
   """Lowers a top-level jaxpr to an MLIR module.
 
@@ -625,7 +632,8 @@ def lower_jaxpr_to_module(
       if result_shardings is not None else result_shardings)
 
   ctx = ModuleContext(backend_or_name, platform, axis_context, name_stack,
-                      keepalives, channel_iter, host_callbacks, dim_vars=dim_vars)
+                      keepalives, channel_iter, host_callbacks, dim_vars=dim_vars,
+                      override_lowering_rules=override_lowering_rules)
   with ctx.context, ir.Location.unknown(ctx.context):
     # Remove module name characters that XLA would alter. This ensures that
     # XLA computation preserves the module name.
@@ -1068,7 +1076,9 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
     loc = _source_info_to_location(eqn.primitive, eqn.params, source_info,
                                    ctx.name_stack)
     with source_info_util.user_context(eqn.source_info.traceback), loc:
-      if eqn.primitive in _platform_specific_lowerings[ctx.platform]:
+      if ctx.override_lowering_rules and eqn.primitive in ctx.override_lowering_rules:
+        rule = ctx.override_lowering_rules[eqn.primitive]
+      elif eqn.primitive in _platform_specific_lowerings[ctx.platform]:
         rule = _platform_specific_lowerings[ctx.platform][eqn.primitive]
       elif eqn.primitive in xla._backend_specific_translations[ctx.platform]:
         rule = xla_fallback_lowering(eqn.primitive)
