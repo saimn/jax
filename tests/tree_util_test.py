@@ -16,6 +16,7 @@ import collections
 import functools
 import pickle
 import re
+import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -26,6 +27,11 @@ from jax import flatten_util
 from jax._src import test_util as jtu
 from jax._src.tree_util import prefix_errors, flatten_one_level
 import jax.numpy as jnp
+
+try:
+  import cloudpickle
+except ImportError:
+  cloudpickle = None
 
 
 def _dummy_func(*args, **kwargs):
@@ -412,10 +418,15 @@ class TreeTest(jtu.JaxTestCase):
     self.assertEqual(str(tree_util.tree_structure({})), "PyTreeDef({})")
 
   @parameterized.parameters(*TREES)
+  @unittest.skipIf(not cloudpickle, "Test requires cloudpickle")
   def testPickleRoundTrip(self, tree):
-    treedef = tree_util.tree_structure(tree)
-    treedef_restored = pickle.loads(pickle.dumps(treedef))
-    self.assertEqual(treedef, treedef_restored)
+    leaves, treedef = tree_util.tree_flatten(tree)
+    treedef_restored = cloudpickle.loads(cloudpickle.dumps(treedef))
+    reconstituted = treedef_restored.unflatten(leaves)
+    # Treedefs will not compare as equal after unpickling; unpickling creates
+    # a copy of the pytree registry. However the treedef should act the same
+    # as the original.
+    self.assertEqual(tree, reconstituted)
 
   def testDictKeysSortable(self):
     d = {"a": 1, 2: "b"}

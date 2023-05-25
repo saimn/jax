@@ -841,7 +841,7 @@ py_test(
     deps = [
         "//jax",
         "//jax:test_util",
-    ],
+    ] + py_deps("cloudpickle"),
 )
 
 pytype_test(

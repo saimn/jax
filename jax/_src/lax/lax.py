@@ -4207,7 +4207,7 @@ def infeed(token, shape=None, partitions=None):
   `token` is used to sequence infeed and outfeed effects.
   `partitions` may be specified inside a `sharded_jit` function.
   """
-  flat_shapes, treedef = pytree.flatten(shape)
+  flat_shapes, treedef = tree_util.tree_flatten(shape)
   for shape in flat_shapes:
     if not isinstance(shape, ShapedArray):
       raise TypeError("shape argument to infeed must be a pytree of "
@@ -4273,7 +4273,7 @@ def outfeed(token, xs, partitions = None):
     if type(partitions) != tuple:  # pylint: disable=unidiomatic-typecheck
       raise ValueError(f"'partitions' argument to outfeed should be a tuple, "
                        f"got {partitions}")
-  flat_xs, _ = pytree.flatten(xs)
+  flat_xs, _ = tree_util.tree_flatten(xs)
   return outfeed_p.bind(token, *flat_xs, partitions=partitions)
 
 def _outfeed_abstract_eval(token, *xs, partitions):

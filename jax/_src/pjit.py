@@ -32,6 +32,7 @@ from jax._src import linear_util as lu
 from jax._src import op_shardings
 from jax._src import sharding_impls
 from jax._src import source_info_util
+from jax._src import tree_util
 from jax._src import traceback_util
 from jax._src import api
 from jax._src import xla_bridge as xb
@@ -52,6 +53,7 @@ from jax._src.interpreters import pxla
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import func as func_dialect
 from jax._src.lib import xla_client as xc
+from jax._src.lib import xla_extension_version
 from jax._src.sharding_impls import (
     NamedSharding, XLACompatibleSharding, GSPMDSharding,
     XLADeviceAssignment, SingleDeviceSharding, PmapSharding,
@@ -249,10 +251,17 @@ def _cpp_pjit(fun: Callable, infer_params_fn, static_argnums, static_argnames,
     global_cache = xc._xla.PjitFunctionCache()
   else:
     global_cache = _cpp_pjit_cache
-  cpp_pjit_f = xc._xla.pjit(  # type: ignore
-      getattr(fun, "__name__", "<unnamed function>"),  # type: ignore
-      fun, cache_miss, static_argnums, static_argnames,  # type: ignore
-      donate_argnums, global_cache)  # type: ignore
+  if xla_extension_version >= 158:
+    cpp_pjit_f = xc._xla.pjit(  # type: ignore
+        getattr(fun, "__name__", "<unnamed function>"),  # type: ignore
+        fun, cache_miss, static_argnums, static_argnames,  # type: ignore
+        donate_argnums, tree_util.default_registry,  # type: ignore
+        global_cache)  # type: ignore
+  else:
+    cpp_pjit_f = xc._xla.pjit(  # type: ignore
+        getattr(fun, "__name__", "<unnamed function>"),  # type: ignore
+        fun, cache_miss, static_argnums, static_argnames,  # type: ignore
+        donate_argnums, global_cache)  # type: ignore
 
   cpp_pjitted_f = wraps(fun)(cpp_pjit_f)
   cpp_pjitted_f._fun = fun
@@ -1185,8 +1194,13 @@ def _pjit_call_impl(*args, jaxpr,
       tuple(getattr(o, '_original_sharding', o) for o in out_shardings),
       resource_env, donated_invars, name, keep_unused, inline)
   donated_argnums = [i for i, d in enumerate(donated_invars) if d]
-  return xc._xla.pjit(name, f, call_impl_cache_miss, [], [], donated_argnums,
-                      _cpp_pjit_cache)(*args)
+  if xla_extension_version >= 158:
+    return xc._xla.pjit(name, f, call_impl_cache_miss, [], [], donated_argnums,
+                        tree_util.default_registry,
+                        _cpp_pjit_cache)(*args)
+  else:
+    return xc._xla.pjit(name, f, call_impl_cache_miss, [], [], donated_argnums,
+                        _cpp_pjit_cache)(*args)  # type: ignore
 
 pjit_p.def_impl(_pjit_call_impl)
 

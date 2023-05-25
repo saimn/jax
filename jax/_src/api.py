@@ -67,6 +67,7 @@ from jax._src.lib import pmap_lib
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import PmapSharding
 from jax._src.traceback_util import api_boundary
+from jax._src import tree_util
 from jax._src.util import unzip2, safe_map, safe_zip, wrap_name, wraps
 from jax._src import util
 
@@ -1825,8 +1826,13 @@ def _cpp_pmap(
 
     return out, fastpath_data
 
-  cpp_mapped_f = pmap_lib.pmap(
-      fun, cache_miss, static_broadcasted_tuple, pxla.shard_arg)
+  if xla_extension_version >= 158:
+    cpp_mapped_f = pmap_lib.pmap(
+        fun, cache_miss, static_broadcasted_tuple, pxla.shard_arg,
+        pytree_registry=tree_util.default_registry)
+  else:
+    cpp_mapped_f = pmap_lib.pmap(
+        fun, cache_miss, static_broadcasted_tuple, pxla.shard_arg)  # type: ignore
   _pmap_cache_clears.add(cpp_mapped_f)
 
   pmap_f = wraps(fun)(cpp_mapped_f)
