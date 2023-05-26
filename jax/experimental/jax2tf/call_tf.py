@@ -397,6 +397,34 @@ effects.custom_derivatives_allowed_effects.add_type(CallTfOrderedEffect)
 effects.ordered_effects.add_type(CallTfOrderedEffect)
 
 
+def get_fully_known_aval_from_tf_concrete_function(concrete_function_flat_tf):
+  def is_fully_known_shape(s):
+    return s.rank is not None and all([d is not None for d in s])
+
+  if all(
+      is_fully_known_shape(s) for s in concrete_function_flat_tf.output_shapes
+  ):
+    avals_from_tf = tuple(
+        # We convert to JAX type, and canonicalize to 32-bit if necessary
+        core.ShapedArray(shape, jax2tf_internal._to_jax_dtype(dtype))
+        for dtype, shape in zip(
+            concrete_function_flat_tf.output_dtypes,
+            concrete_function_flat_tf.output_shapes,
+        )
+    )
+  else:
+    msg = (
+        "call_tf cannot call functions whose output has dynamic shape. Found"
+        f" output shapes: {concrete_function_flat_tf.output_shapes}. Consider"
+        " using the `output_shape_dtype` argument to call_tf. \nSee"
+        " https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf"
+        " for a discussion."
+    )
+    raise ValueError(msg)
+
+  return avals_from_tf
+
+
 def _call_tf_abstract_eval(
     *args_flat_avals,
     function_flat_tf,
@@ -420,39 +448,12 @@ def _call_tf_abstract_eval(
   # there is a small cost of calling it more often than needed.
   concrete_function_flat_tf = _get_concrete_function_tf(function_flat_tf,
                                                         args_flat_sig_tf)
-  # TODO(b/278298710): when `call_tf_graph=True` for non-compilable tf function,
-  # Tensorflow shape inference is not supported and the concrete function has
-  # no structured output shapes attributes sometimes.
-  # So users always need provide output_shape_dtypes. However, in some case if
-  # In the case that the tf.function has no return value, the `output_shape_dtype` should be  `None`
   if len(concrete_function_flat_tf.outputs) == 0:
     return tuple(), effects
-
-  if call_tf_graph and output_avals is None:
-    raise ValueError(
-        "call_tf with `call_tf_graph=True` must provide output_shape_dtype"
-        " arg.")
-  if output_avals is not None:
-    return output_avals, effects
-
-  def is_fully_known_shape(s):
-    return s.rank is not None and all([d is not None for d in s])
-
-  if all(is_fully_known_shape(s)
-        for s in concrete_function_flat_tf.output_shapes):
-    avals_from_tf = tuple(
-        # We convert to JAX type, and canonicalize to 32-bit if necessary
-        core.ShapedArray(shape, jax2tf_internal._to_jax_dtype(dtype))
-        for dtype, shape in zip(concrete_function_flat_tf.output_dtypes,
-                                concrete_function_flat_tf.output_shapes))
-    return avals_from_tf, effects
-
-  msg = ("call_tf cannot call functions whose output has dynamic shape. "
-    f"Found output shapes: {concrete_function_flat_tf.output_shapes}. "
-    "Consider using the `output_shape_dtype` argument to call_tf. "
-    "\nSee https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf"
-      " for a discussion.")
-  raise ValueError(msg)
+  if output_avals is None:
+    output_avals = get_fully_known_aval_from_tf_concrete_function(
+        concrete_function_flat_tf)
+  return output_avals, effects
 
 
 call_tf_p.def_effectful_abstract_eval(_call_tf_abstract_eval)
@@ -482,6 +483,10 @@ def _call_tf_lowering(
     raise ValueError("platform {platform} not supported")
 
   concrete_function_flat_tf = _get_concrete_function_tf(function_flat_tf, args_flat_sig_tf)
+
+  if output_avals is None:
+    output_avals = get_fully_known_aval_from_tf_concrete_function(
+        concrete_function_flat_tf)
 
   captured_inputs = []
   if concrete_function_flat_tf.captured_inputs:
