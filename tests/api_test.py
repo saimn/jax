@@ -1068,17 +1068,13 @@ class CPPJitTest(jtu.BufferDonationTestCase):
       _ = jitted_f(1, 2)
     self.assertEqual(count[0], 1)
 
-  @jtu.ignore_warning(category=DeprecationWarning)
   def test_jit_lower_compile_compiler_ir(self):
-    # TODO(frostig): remove (deprecated)
     f = self.jit(lambda x: x + 4).lower(1.).compile()
-    self.assertIsNotNone(f.compiler_ir())
+    self.assertIsNotNone(f.runtime_executable().hlo_modules())
 
-  @jtu.ignore_warning(category=DeprecationWarning)
   def test_jit_lower_trivial_compile_compiler_ir(self):
-    # TODO(frostig): remove (deprecated)
     f = self.jit(lambda x: x).lower(1.).compile()
-    self.assertIsNotNone(f.compiler_ir())
+    self.assertIsNotNone(f.runtime_executable().hlo_modules())
 
   def test_jit_lower_compile_as_text(self):
     f = self.jit(lambda x: x).lower(1.).compile()
@@ -6271,7 +6267,7 @@ class DCETest(jtu.JaxTestCase):
   def test_dce_jaxpr_cond_nontrivial(self):
     x = jnp.array(1., dtype='float32')
 
-    # start with 7 eqns, dont use an output so an eqn can be trimmed on each
+    # start with 7 eqns, don't use an output so an eqn can be trimmed on each
     # side and x2 _can_ be pruned
     def f(x1, x2):
       return lax.cond(x1 > 0,
