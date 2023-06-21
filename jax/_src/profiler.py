@@ -204,6 +204,17 @@ def stop_trace():
     _profile_state.log_dir = None
 
 
+def get_profiled_instructions_proto(tensorborad_dir: str) -> bytes:
+  """Starts the profiler server on port `port`.
+
+  Using the "TensorFlow profiler" feature in `TensorBoard
+  <https://www.tensorflow.org/tensorboard>`_ 2.2 or newer, you can
+  connect to the profiler server and sample execution traces that show CPU,
+  GPU, and/or TPU device activity.
+  """
+  return xla_client.profiler.get_profiled_instructions_proto(tensorborad_dir)
+
+
 @contextmanager
 def trace(log_dir, create_perfetto_link=False, create_perfetto_trace=False):
   """Context manager to take a profiler trace.
@@ -314,7 +325,6 @@ def annotate_function(func: Callable, name: Optional[str] = None,
       return func(*args, **kwargs)
     return wrapper
   return wrapper
-
 
 
 def device_memory_profile(backend: Optional[str] = None) -> bytes:
