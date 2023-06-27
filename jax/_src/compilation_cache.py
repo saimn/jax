@@ -119,6 +119,68 @@ def put_executable(
   _cache.put(cache_key, serialized_executable)
 
 
+def get_cache_key(
+    module: ir.Module, devices: np.ndarray, compile_options, backend
+) -> str:
+  return CacheKey().get(module, devices, compile_options, backend)
+
+
+def is_initialized():
+  return _cache is not None
+
+
+def reset_cache():
+  global _cache
+  assert is_initialized()
+  logger.info("Resetting cache at %s.", _cache._path)
+  _cache = None
+
+
+class CacheKey:
+
+  def __init__(self, legacy_mode: bool = True):
+    self.legacy_mode = legacy_mode
+
+  def get(
+      self, module: ir.Module, devices: np.ndarray, compile_options, backend
+  ) -> str:
+    """Creates a hashed string to use as a key to the compilation cache.
+
+    get_cache_key takes in the MLIR module and compile_options of a program
+    and hashes all the components into a unique hash. The hash is returned as a
+    hex-encoded string that is 256 characters long.
+
+    Typical return value example:
+      '14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
+    """
+    if not self.legacy_mode:
+      return ""  # only legacy mode supported for now
+
+    entries = [
+        ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
+        ("devices", lambda hash_obj: _hash_devices(hash_obj, devices)),
+        (
+            "compile_options",
+            lambda hash_obj: _hash_compile_options(hash_obj, compile_options),
+        ),
+        (
+            "jax_lib version",
+            lambda hash_obj: hash_obj.update(
+                bytes(jaxlib_version_str.encode("utf-8"))
+            ),
+        ),
+        ("the backend", lambda hash_obj: _hash_platform(hash_obj, backend)),
+        ("XLA flags", _hash_xla_flags),
+        ("compression", _hash_compression),
+    ]
+
+    hash_obj = hashlib.sha256()
+    for name, hashfn in entries:
+      hashfn(hash_obj)
+      _log_cache_key_hash(hash_obj, name, hashfn)
+    return hash_obj.digest().hex()
+
+
 def _log_cache_key_hash(hash_obj, last_serialized: str, hashfn):
   if logger.isEnabledFor(logging.DEBUG):
     # Log the hash of just this entry
@@ -137,41 +199,11 @@ def _log_cache_key_hash(hash_obj, last_serialized: str, hashfn):
     )
 
 
-def get_cache_key(module: ir.Module, devices: np.ndarray, compile_options,
-                  backend) -> str:
-  """Creates a hashed string to use as a key to the compilation cache.
-
-  get_cache_key takes in the MLIR module and compile_options of a program
-  and hashes all the components into a unique hash. The hash is returned as a
-  hex-encoded string that is 256 characters long.
-
-  Typical return value example:
-   '14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
-  """
-  entries = [
-    ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
-    ("devices", lambda hash_obj: _hash_devices(hash_obj, devices)),
-    ("compile_options",
-     lambda hash_obj: _hash_compile_options(hash_obj, compile_options)),
-    ("jax_lib version",
-     lambda hash_obj: hash_obj.update(bytes(jaxlib_version_str.encode("utf-8")))
-    ),
-    ("the backend", lambda hash_obj: _hash_platform(hash_obj, backend)),
-    ("XLA flags", _hash_xla_flags),
-    ("compression", _hash_compression),
-  ]
-
-  hash_obj = hashlib.sha256()
-  for name, hashfn in entries:
-    hashfn(hash_obj)
-    _log_cache_key_hash(hash_obj, name, hashfn)
-  return hash_obj.digest().hex()
-
-
 def _serialize_ir(m: ir.Module) -> bytes:
   output = io.BytesIO()
   m.operation.write_bytecode(file=output)
   return output.getvalue()
+
 
 def _canonicalize_ir(m_original: ir.Module) -> bytes:
   # TODO(phawkins): remove the 'else' branch when jaxlib 0.4.9 is the minimum.
@@ -187,6 +219,7 @@ def _canonicalize_ir(m_original: ir.Module) -> bytes:
     bytecode = _serialize_ir(m_original)
     return re.sub(b" at 0x[a-f0-9]+>", b" at 0x...>", bytecode)
 
+
 def _hash_computation(hash_obj, module):
   if config.jax_compilation_cache_include_metadata_in_key:
     canonical_ir = _serialize_ir(module)
@@ -194,9 +227,11 @@ def _hash_computation(hash_obj, module):
     canonical_ir = _canonicalize_ir(module)
   hash_obj.update(canonical_ir)
 
+
 def _hash_devices(hash_obj, devices: np.ndarray) -> None:
   for device in devices.flat:
     _hash_string(hash_obj, device.device_kind)
+
 
 def _hash_compile_options(hash_obj, compile_options_obj):
   expected_num_compile_options = 12
@@ -290,30 +325,29 @@ def _hash_platform(hash_obj, backend):
   _hash_string(hash_obj, backend.runtime_type)
 
 
-_xla_flags_to_exclude_from_cache_key = [
-    "--xla_dump_compress_protos",
-    "--xla_dump_module_metadata",
-    "--xla_dump_max_hlo_modules",
-    "--xla_dump_include_timestamp",
-    "--xla_dump_hlo_pass_re",
-    "--xla_dump_hlo_module_re",
-    "--xla_dump_hlo_snapshots",
-    "--xla_dump_fusion_visualization",
-    "--xla_dump_hlo_as_url",
-    "--xla_dump_hlo_as_proto",
-    "--xla_dump_hlo_as_text",
-    "--xla_dump_to",
-    "--xla_force_host_platform_device_count",
-    "--xla_dump_disable_metadata",
-    "--xla_dump_hlo_pipeline_re",
-    "--xla_tpu_sdc_checker_streamz_metric",
-    "--xla_tpu_sdc_checker_enable_sdc_event_callbacks",
-]
-
-extra_flag_prefixes_to_include_in_cache_key: list[str] = []
-
-
 def _hash_xla_flags(hash_obj):
+  xla_flags_to_exclude_from_cache_key = [
+      "--xla_dump_compress_protos",
+      "--xla_dump_module_metadata",
+      "--xla_dump_max_hlo_modules",
+      "--xla_dump_include_timestamp",
+      "--xla_dump_hlo_pass_re",
+      "--xla_dump_hlo_module_re",
+      "--xla_dump_hlo_snapshots",
+      "--xla_dump_fusion_visualization",
+      "--xla_dump_hlo_as_url",
+      "--xla_dump_hlo_as_proto",
+      "--xla_dump_hlo_as_text",
+      "--xla_dump_to",
+      "--xla_force_host_platform_device_count",
+      "--xla_dump_disable_metadata",
+      "--xla_dump_hlo_pipeline_re",
+      "--xla_tpu_sdc_checker_streamz_metric",
+      "--xla_tpu_sdc_checker_enable_sdc_event_callbacks",
+  ]
+
+  extra_flag_prefixes_to_include_in_cache_key: list[str] = []
+
   xla_flags = []
 
   xla_flags_env_var = os.getenv("XLA_FLAGS")
@@ -329,7 +363,7 @@ def _hash_xla_flags(hash_obj):
   # N.B. all XLA flags that take an argument must use '=' and not a space
   # (e.g. --xla_force_host_platform_device_count=8) (I think).
   for flag in xla_flags:
-    if flag.split("=")[0] in _xla_flags_to_exclude_from_cache_key:
+    if flag.split("=")[0] in xla_flags_to_exclude_from_cache_key:
       logger.debug("Not including XLA flag in cache key: %s", flag)
       continue
     logger.debug("Including XLA flag in cache key: %s", flag)
@@ -362,14 +396,3 @@ def _hash_int_list(hash_obj, int_list):
   for i in int_list:
     _hash_int(hash_obj, i)
   _hash_int(hash_obj, len(int_list))
-
-
-def is_initialized():
-  return _cache is not None
-
-
-def reset_cache():
-  global _cache
-  assert is_initialized()
-  logger.info("Resetting cache at %s.", _cache._path)
-  _cache = None
