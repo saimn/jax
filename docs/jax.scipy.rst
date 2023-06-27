@@ -14,6 +14,16 @@ jax.scipy.fft
    idct
    idctn
 
+jax.scipy.interpolate
+---------------------
+
+.. automodule:: jax.scipy.interpolate
+
+.. autosummary::
+  :toctree: _autosummary
+
+   RegularGridInterpolator
+
 jax.scipy.linalg
 ----------------
 
